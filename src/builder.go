@@ -36,10 +36,18 @@ import (
 	rplib "github.com/Lyoncore/ubuntu-recovery-rplib"
 )
 
-func hack_grub_cfg(recovery_type_cfg string, recovery_type_label string, recovery_part_label string, grub_cfg string) {
+func hack_grub_cfg(recovery_type_cfg string, recovery_type_label string, recovery_part_label string, grub_cfg string) error {
+	system_boot_part := rplib.Findfs("LABEL=system-boot")
+	log.Println("system_boot_part:", system_boot_part)
+	err := os.MkdirAll("/tmp/system-boot", 0755)
+	rplib.Checkerr(err)
+	err = syscall.Mount(system_boot_part, "/tmp/system-boot", "vfat", 0, "")
+	rplib.Checkerr(err)
+	defer syscall.Unmount("/tmp/system-boot", 0)
+	//FIXME, remove the cloud_init_disabled
 	// add cloud-init disabled option
 	// sed -i "s/^set cmdline="\(.*\)"$/set cmdline="\1 $cloud_init_disabled"/g"
-	rplib.Shellexec("sed", "-i", "s/^set cmdline=\"\\(.*\\)\"$/set cmdline=\"\\1 $cloud_init_disabled\"/g", grub_cfg)
+	//rplib.Shellexec("sed", "-i", "s/^set cmdline=\"\\(.*\\)\"$/set cmdline=\"\\1 $cloud_init_disabled\"/g", grub_cfg)
 
 	// add recovery grub menuentry
 	f, err := os.OpenFile(grub_cfg, os.O_APPEND|os.O_WRONLY, 0600)
@@ -65,6 +73,8 @@ menuentry "%s" {
 	}
 
 	f.Close()
+
+	return nil
 }
 
 func UpdateUbootEnv() error {
@@ -77,6 +87,15 @@ func UpdateUbootEnv() error {
 		return err
 	}
 	return err
+}
+
+func UpdateBootloaderEnv(bootloader, RecoveryLabel string) error {
+	if bootloader == "grub" {
+		return hack_grub_cfg(rplib.FACTORY_RESTORE, "Factory Restore", RecoveryLabel, GRUB_CFG)
+	} else if bootloader == "uboot" {
+		return UpdateUbootEnv()
+	}
+	return fmt.Errorf("Unknown bootloader %s", bootloader)
 }
 
 //FIXME: now only support eth0, enx0 interface

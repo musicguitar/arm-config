@@ -201,8 +201,101 @@ func GetPartitions(recoveryLabel string) (*Partitions, error) {
 	return &parts, nil
 }
 
-// TODO: bootloader if need to support grub
-func RestoreParts(parts *Partitions, bootloader string, partType string) error {
+func RestoreGrubParts(parts *Partitions, partType string) error {
+	var dev_path string = strings.Replace(parts.DevPath, "mapper/", "", -1)
+	if partType == "gpt" {
+		rplib.Shellexec("sgdisk", dev_path, "--randomize-guids", "--move-second-header")
+	}
+
+	// Remove partitions after recovery partition
+	part_nr := parts.Recovery_nr + 1
+	for part_nr <= parts.Last_part_nr {
+		cmd := exec.Command("parted", "-ms", dev_path, "rm", fmt.Sprintf("%v", part_nr))
+		cmd.Run()
+		part_nr++
+	}
+
+	var start string
+	var end string
+	var nr string
+	var path string
+
+	// Restore system-boot partition
+	if parts.Sysboot_nr == -1 {
+		parts.Sysboot_start = parts.Recovery_end + 1
+
+		//TODO:allocate partition according to gadget.PartitionLayout
+		parts.Sysboot_end = parts.Recovery_start + (64 * 1024 * 1024)
+
+		parts.Sysboot_nr = parts.Recovery_nr + 1 //system-boot is one after recovery
+	}
+	start = fmt.Sprintf("%vB", parts.Sysboot_start)
+	end = fmt.Sprintf("%vB", parts.Sysboot_end)
+	nr = strconv.Itoa(parts.Sysboot_nr)
+	path = fmtPartPath(parts.DevPath, parts.Sysboot_nr)
+
+	if partType == "gpt" {
+		cmd := exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "fat32", start, end, "name", nr, SysbootLabel)
+		cmd.Run()
+	} else { //mbr
+		cmd := exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "fat32", start, end)
+		cmd.Run()
+	}
+
+	cmd := exec.Command("udevadm", "settle")
+	cmd.Run()
+	cmd = exec.Command("mkfs.vfat", "-F", "32", "-n", SysbootLabel, path)
+	cmd.Run()
+	err := os.MkdirAll(SYSBOOT_MNT_DIR, 0755)
+	if err != nil {
+		return err
+	}
+	err = syscall.Mount(path, SYSBOOT_MNT_DIR, "vfat", 0, "")
+	if err != nil {
+		return err
+	}
+	defer syscall.Unmount(SYSBOOT_MNT_DIR, 0)
+	cmd = exec.Command("tar", "--xattrs", "-xJvpf", SYSBOOT_TARBALL, "-C", SYSBOOT_MNT_DIR)
+	cmd.Run()
+	cmd = exec.Command("parted", "-ms", dev_path, "set", nr, "boot", "on")
+	cmd.Run()
+
+	// Restore writable partition
+	if parts.Writable_nr == -1 {
+		parts.Writable_start = parts.Sysboot_end + 1
+
+		parts.Writable_nr = parts.Sysboot_nr + 1 //writable is one after system-boot
+	}
+	start = fmt.Sprintf("%vB", parts.Writable_start)
+	end = "-1M"
+	nr = strconv.Itoa(parts.Writable_nr)
+	path = fmtPartPath(parts.DevPath, parts.Writable_nr)
+
+	if partType == "gpt" {
+		cmd = exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "ext4", start, "-1M", "name", nr, WritableLabel)
+		cmd.Run()
+	} else { //mbr
+		cmd = exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "ext4", start, "-1M")
+		cmd.Run()
+	}
+
+	cmd = exec.Command("udevadm", "settle")
+	cmd.Run()
+
+	cmd = exec.Command("mkfs.ext4", "-F", "-L", WritableLabel, path)
+	cmd.Run()
+	err = os.MkdirAll(WRITABLE_MNT_DIR, 0755)
+	rplib.Checkerr(err)
+	err = syscall.Mount(path, WRITABLE_MNT_DIR, "ext4", 0, "")
+	rplib.Checkerr(err)
+	defer syscall.Unmount(WRITABLE_MNT_DIR, 0)
+	cmd = exec.Command("tar", "--xattrs", "-xJvpf", WRITABLE_TARBALL, "-C", WRITABLE_MNT_DIR)
+	cmd.Run()
+
+	return nil
+}
+
+func RestoreUbootParts(parts *Partitions, partType string) error {
 	var dev_path string = strings.Replace(parts.DevPath, "mapper/", "", -1)
 	if partType == "gpt" {
 		rplib.Shellexec("sgdisk", dev_path, "--randomize-guids", "--move-second-header")
@@ -251,7 +344,7 @@ func RestoreParts(parts *Partitions, bootloader string, partType string) error {
 		cmd = exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "ext4", writable_start, "-1M", "name", writable_nr, WritableLabel)
 		cmd.Run()
 	} else { //mbr
-		cmd = exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "fat32", writable_start, "-1M")
+		cmd = exec.Command("parted", "-a", "optimal", "-ms", dev_path, "--", "mkpart", "primary", "ext4", writable_start, "-1M")
 		cmd.Run()
 	}
 
@@ -269,4 +362,15 @@ func RestoreParts(parts *Partitions, bootloader string, partType string) error {
 	cmd.Run()
 
 	return nil
+
+}
+
+func RestoreParts(parts *Partitions, bootloader string, partType string) error {
+	if bootloader == "grub" {
+		return RestoreGrubParts(parts, partType)
+	} else if bootloader == "u-boot" {
+		return RestoreUbootParts(parts, partType)
+	}
+
+	return fmt.Errorf("Unknown bootloader %s", bootloader)
 }

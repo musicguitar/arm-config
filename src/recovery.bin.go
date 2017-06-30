@@ -61,6 +61,8 @@ const (
 	RECOVERY_PARTITION_DIR = "/recovery_partition/"
 	UBOOT_ENV_SRC          = RECOVERY_PARTITION_DIR + "uboot.env"
 	UBOOT_ENV_IN_SRC       = RECOVERY_PARTITION_DIR + "uboot.env.in"
+
+	GRUB_CFG = SYSBOOT_MNT_DIR + "grub.cfg"
 )
 
 var configs rplib.ConfigRecovery
@@ -139,7 +141,7 @@ var enableLogger = EnableLogger
 var copySnaps = CopySnaps
 var addFirstBootService = AddFirstBootService
 var restoreAsserions = RestoreAsserions
-var updateUbootEnv = UpdateUbootEnv
+var updateBootloaderEnv = UpdateBootloaderEnv
 
 func recoverProcess() {
 	commitstampInt64, _ := strconv.ParseInt(commitstamp, 10, 64)
@@ -179,12 +181,10 @@ func recoverProcess() {
 		restoreAsserions()
 	}
 
-	//Darren works here
 	// update uboot env
-	log.Println("Update uboot env(ESP/system-boot)")
-	//fsck needs ignore error code
+	log.Println("Update bootloader env(ESP/system-boot)")
 	log.Println("[set next recoverytype to factory_restore]")
-	err = updateUbootEnv()
+	err = updateBootloaderEnv(configs.Configs.Bootloader, RecoveryLabel)
 	rplib.Checkerr(err)
 }
 
